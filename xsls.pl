@@ -36,27 +36,67 @@ my $grammar = <<'EOF';
 # XSLTScript grammar, reconstructed
 
 startrule	: item(s) eofile
-	{ $return = $item[1] }
+		{ $return = $item[1] }
 
-#item		: "<!--" <commit> comment
-#		| "!" <commit> shortcut
-#		| "<%" <commit> instruction "%>"
-#		| instruction_name <commit> 
+item		: "<!--" <commit> comment
+		| "!!" <commit> double_exclam
+		| "!{" <commit> exclam_xpath
+		| "!" name <commit> exclam_name
+		| "<%" <commit> instruction "%>"
+		| "<" name attrs ">" <commit> item(s?) "</" name ">"
+		| "<" <commit> name attrs "/" ">"
+		| "X:variable" <commit> xvariable
+		| "X:var" <commit> xvariable
+		| "X:template" <commit> xtemplate
+		| "X:if" <commit> xif
+		| "X:param" <commit> xparam
+		| "X:for-each" <commit> xforeach
+		| "X:sort" <commit> xsort
+		| "X:when" <commit> xwhen
+		| "X:attribute" <commit> xattribute
+		| "X:output" <commit> xoutput
+		| "X:copy-of" <commit> xcopyof
+		| instruction <commit> attrs body
+		| text
+		| <error>
 
-item		: comment | instruction | shortcut
-item_text	: comment | instruction | shortcut | text
+# list of simple instructions
+
+instruction	: "X:stylesheet"
+		| "X:transform"
+		| "X:attribute-set"
+		| "X:element"
+		| "X:apply-templates"
+		| "X:choose"
+		| "X:otherwise"
+		| "X:value-of"
+		| "X:apply-imports"
+		| "X:number"
+		| "X:include"
+		| "X:import"
+		| "X:strip-space"
+		| "X:preserve-space"
+		| "X:copy"
+		| "X:text"
+		| "X:comment"
+		| "X:processing-instruction"
+		| "X:decimal-format"
+		| "X:namespace-alias"
+		| "X:key"
+		| "X:fallback"
+		| "X:message"
 
 # comments, <!-- ... -->
 # not sure if it's something to be interpreted specially
 # likely an artifact of our dump process
 
-comment		: "<!--" <commit> /((?!-->).)*/ms "-->"
+comment		: /((?!-->).)*/ms "-->"
 		{ $return = ""; 1; }
 
 # special chars: ', ", {, }, \
 # if used in text, they needs to be escaped with backslash
 
-text		: quoted | unreserved | "'" | "\""
+text		: quoted | unreserved | "'" | "\"" | "{"
 quoted		: "\\" special
 		{ $return = $item{special}; 1; }
 special		: "'" | "\"" | "\\" | "{" | "}"
@@ -68,96 +108,99 @@ unreserved	: /[^'"\\{}]/
 # !! for X:apply-templates
 # !foo() for X:call-template name="foo"
 
-shortcut	: double_exclam | exclam_xpath | exclam_name
-double_exclam	: "!!" <commit> param(s?) ";"
-exclam_xpath	: "!{" <commit> text(s) "}"
-exclam_name	: "!" <commit> name "(" param(s?) ")"
-name		: /[a-z0-9_:-]+/i
+# !root (path = { !{ substring($DIRNAME, 2) } })
+# !root (path = "substring-after($path, '/')")
 
-param		: param_name "=" param_value
-param_name	: /[a-z0-9_:-]+/i
-param_value	: "\"" /[^"]*/ "\""
+double_exclam	: value(?) params attrs ";"
+
+exclam_xpath	: xpath(s?) "}"
+xpath		: /[^}'"]+/
+		| /"[^"]*"/
+		| /'[^']*'/
+
+exclam_name	: params
+
+# instruction attributes
+# name="value"
+
+attrs		: attr(s?)
+attr		: name "=" value
+name		: /[a-z0-9_:-]+/i
+value		: /"[^"]*"/
+
+# template parameters
+# ( bar="init", baz={markup} )
+
+params		: "(" param ("," param)(s?) ")"
+		| ""
+param		: name "=" value
+		| name "=" <commit> "{" item(s) "}"
+		| name
+
+# instruction body
+# ";" for empty body, "{ ... }" otherwise
 
 body		: ";"
-		| "{" <commit> item_text(s?) "}"
+		| "{" <commit> item(s?) "}"
 
-instructions	: xstylesheet | xtransform
-		| xattributeset | xattribute | xelement
-		| xparam | xapplytemplates 
-		| xforeach | xchoose | xwhen | xotherwise
-		| xvalueof | xapplyimports | xnumber
-		| xoutput | xinclude | ximport | xstripspace | xpreservespace
-		| xcopyof | xcopy | xtext | xsort | xcomment
-		| xprocessinginstruction | xdecimalformat | xnamespacealias
-		| xkey | xfallback | xmessage
+# special handling of some instructions
+# X:if attribute is test=
 
-instruction	: "<%" instruction_simple "%>"
-		| instruction_simple
-
-instruction_simple : instructions <commit> param(s?) body
-		| xif
-		| xtemplate
-		| xvar
-
-# X:if parameter is test=
-
-xif		: "X:if" param_value(?) param(s?) body "else" <commit> body
-		| "X:if" <commit> param_value(?) param(s?) body
+xif		: value(?) attrs body "else" <commit> body
+		| value(?) attrs body
+		| <error>
 
 # X:template name(params) = "match" {
 # X:template name( bar="init", baz={markup} ) = "match" mode="some" {
 
-xtemplate	: "X:template" param_name(?) xtemplate_params(?)
-		  xtemplate_match(?) param(s?) body
-xtemplate_params: "(" xtemplate_param ("," xtemplate_param)(s?) ")"
-xtemplate_param	: param_name ("=" param_value)(?)
-xtemplate_match	: "=" param_value
+xtemplate	: name(?) params ( "=" value )(?)
+		  attrs body
 
 # X:var LINK = "/article/@link";
 # X:var year = { ... }
+# semicolon is optional
 
-xvar		: xvar_name <commit> xvar_params
-xvar_params	: param_name "=" param_value ";"
-		| param_name "=" body
+xvariable	: name "=" value(?) attrs body
+		| name "=" value(?)
 		| <error>
 
-xvar_name	: "X:variable"
-		| "X:var"
+# X:param XML = "'../xml'";
+# X:param YEAR;
 
-# normal instructions
+xparam		: name ("=" value)(?) attrs body
 
-xstylesheet	: "X:stylesheet"
-xtransform	: "X:transform"
-xattributeset	: "X:attribute-set"
-xattribute	: "X:attribute"
-xelement	: "X:element"
-xvariable	: "X:variable"
-xvar		: "X:var"
-xparam		: "X:param"
-xapplytemplates	: "X:apply-templates"
-xforeach	: "X:for-each"
-xchoose		: "X:choose"
-xwhen		: "X:when"
-xotherwise	: "X:otherwise"
-xvalueof	: "X:value-of"
-xapplyimports	: "X:apply-imports"
-xnumber		: "X:number"
-xoutput		: "X:output"
-xinclude	: "X:include"
-ximport		: "X:import"
-xstripspace	: "X:strip-space"
-xpreservespace	: "X:preserve-space"
-xcopyof		: "X:copy-of"
-xcopy		: "X:copy"
-xtext		: "X:text"
-xsort		: "X:sort"
-xcomment	: "X:comment"
-xprocessinginstruction : "X:processing-instruction"
-xdecimalformat	: "X:decimal-format"
-xnamespacealias	: "X:namespace-alias"
-xkey		: "X:key"
-xfallback	: "X:fallback"
-xmessage	: "X:message"
+# X:for-each "section[@id and @name]" { ... }
+# X:for-each "link", X:sort "@id" {
+
+xforeach	: value attrs body
+		| value attrs "," "X:sort" <commit> value attrs body
+
+# X:sort select
+# X:sort "@id"
+
+xsort		: value attrs body
+
+# X:when "position() = 1" { ... }
+
+xwhen		: value attrs body
+
+# X:attribute "href" { ... }
+
+xattribute	: value attrs body
+
+# X:output
+# semicolon is optional
+
+xoutput		: attrs body
+		| attrs
+
+# "X:copy-of"
+# semicolon is optional
+
+xcopyof		: value attrs body
+		| value
+
+# eof
 
 eofile		: /^\Z/
 
