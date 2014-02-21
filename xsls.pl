@@ -99,7 +99,7 @@ instruction	: "X:stylesheet"
 # likely an artifact of our dump process
 
 comment		: /((?!-->).)*/ms "-->"
-	{ $return = "<!-- " . $item[1] . "-->"; 1; }
+	{ $return = ""; 1 }
 
 # special chars: ', ", {, }, \
 # if used in text, they needs to be escaped with backslash
@@ -108,7 +108,7 @@ text		: quoted | unreserved | "'" | "\"" | "{"
 quoted		: "\\" special
 	{ $return = $item{special}; 1; }
 special		: "'" | "\"" | "\\" | "{" | "}"
-unreserved	: /[^'"\\{}]/
+unreserved	: /[^'"\\{}<\s]+\s*/
 
 # shortcuts:
 #
@@ -121,8 +121,8 @@ unreserved	: /[^'"\\{}]/
 
 exclam_double	: value(?) params(?) attrs ";"
 	{ $return = [
-		"X:apply-templates", "select", $item{value}, $item{attrs},
-		$item{params}
+		"X:apply-templates", "select", $item[1][0], $item{attrs},
+		$item[2][0]
 	]; 1 }
 
 exclam_xpath	: xpath "}"
@@ -143,7 +143,7 @@ value		: /"[^"]*"/
 # template parameters
 # ( bar="init", baz={markup} )
 
-params		: "(" param(s /,/) ")" 
+params		: "(" param(s? /,/) ")" 
 	{ $return = $item[2]; 1 }
 param		: name "=" value
 	{ $return = [
@@ -155,11 +155,11 @@ param		: name "=" value
 		| name "=" <commit> "{" item(s) "}"
 	{ $return = [
 		"X:with-param", "name", $item{name}, [],
-		$item{item}
+		$item[5]
 	]; 1 }
 		| name
 	{ $return = [
-		"X:with-param", "name", $item{name}, []
+		"X:param", "name", $item{name}, []
 	]; 1 }
 
 # instruction body
@@ -182,7 +182,7 @@ xif		: value body "else" <commit> body
 	]; 1 }
 		| value attrs body
 	{ $return = [
-		"X:if", "test", $item[1], $item{attrs}, $item{body},
+		"X:if", "test", $item{value}, $item{attrs}, $item{body},
 	]; 1 }
 		| attrs body
 	{ $return = [
@@ -197,7 +197,7 @@ xtemplate	: name(?) params(?) ( "=" value )(?) attrs body
 	{ $return = [
 		"X:template", "name", $item[1][0], "match", $item[3][0],
 		$item{attrs},
-		[ ($item{params} ? @{$item{params}} : ()), @{$item{body}} ]
+		[ ($item[2][0] ? @{$item[2][0]} : ()), @{$item{body}} ]
 	]; 1 }
 
 # X:var LINK = "/article/@link";
@@ -313,17 +313,23 @@ sub format_tree {
 	my ($tree, $indent) = @_;
 	my $s = '';
 
-	$indent ||= 0;
+	if (!defined $indent) {
+		$indent = 0;
+		$s .= '<?xml version="1.0" encoding="utf-8"?>' . "\n";
+	}
+
 	my $space = "   " x $indent;
 
 	foreach my $el (@{$tree}) {
 		if (!defined $el) {
+			warn "Undefined element in output.\n";
 			$s .= $space . "(undef)" . "\n";
 			next;
 		}
 
 		if (not ref($el) && defined $el) {
-			$s .= $space . $el . "\n";
+			#$s .= $space . $el . "\n";
+			$s .= $el;
 			next;
 		}
 
@@ -336,9 +342,13 @@ sub format_tree {
 
 			$s .= $space . "<" . join(" ", $name, @{$attrs});
 			if ($body) {
-				$s .= ">\n";
-				$s .= format_tree($body, $indent + 1);
-				$s .= $space . "</$name>\n";
+				my $t = format_tree($body, $indent + 1);
+				if ($t =~ /\n/) {
+					$s .= ">\n" . $t
+						. $space . "</$name>\n";
+				} else {
+					$s .= ">$t</$name>\n";
+				}
 			} else {
 				$s .= "/>\n";
 			}
@@ -362,7 +372,6 @@ sub format_tree {
 			}
 
 			if ($name eq "xsl:stylesheet") {
-				$s .= '<?xml version="1.0" encoding="utf-8"?>' . "\n";
 				push @attrs, 'xmlns:xsl="http://www.w3.org/1999/XSL/Transform"';
 				push @attrs, 'version="1.0"';
 			}
@@ -372,12 +381,16 @@ sub format_tree {
 
 			$s .= $space . "<" . join(" ", $name, @{$attrs});
 			
-			if ($body) {
-				$s .= ">\n";
-				$s .= format_tree($body, $indent + 1);
-				$s .= $space . "</$name>\n";
+			if ($body && scalar @{$body} > 0) {
+				my $t = format_tree($body, $indent + 1);
+				if ($t =~ /\n/) {
+					$s .= ">\n" . $t
+						. $space . "</$name>\n";
+				} else {
+					$s .= ">$t</$name>\n";
+				}
 			} else {
-				$s .= "/>\n\n";
+				$s .= "/>\n";
 			}
 
 			next;
@@ -405,8 +418,6 @@ my $tree = $parser->startrule($lines)
 	or die "Failed to parse $ARGV.\n";
 
 #print Dumper($tree);
-#print join("\n", @{$tree});
-
 print format_tree($tree);
 
 ###############################################################################
