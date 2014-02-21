@@ -41,13 +41,17 @@ startrule	: item(s) eofile
 item		: "<!--" <commit> comment
 		| "!!" <commit> exclam_double
 		| "!{" <commit> exclam_xpath
-		| "!" name <commit> exclam_name
+		| "!" name <commit> params
+	{ $return = [
+		"X:call-template", "name", $item{name}, [],
+		$item{params}
+	]; 1 }
 		| "<%" <commit> instruction "%>"
 	{ $return = $item{instruction}; 1 }
 		| "<" name attrs ">" <commit> item(s?) "</" name ">"
-	{ $return = ::format_tag($item{name}, $item{attrs}, $item[6]); 1 }
+	{ $return = [ "tag", $item{name}, $item{attrs}, $item[6] ]; 1 }
 		| "<" <commit> name attrs "/" ">"
-	{ $return = ::format_tag($item{name}, $item{attrs}); 1 }
+	{ $return = [ "tag", $item{name}, $item{attrs} ]; 1 }
 		| "X:variable" <commit> xvariable
 		| "X:var" <commit> xvariable
 		| "X:template" <commit> xtemplate
@@ -60,9 +64,7 @@ item		: "<!--" <commit> comment
 		| "X:output" <commit> xoutput
 		| "X:copy-of" <commit> xcopyof
 		| instruction <commit> attrs body
-	{ $return = ::format_instruction(
-		$item{instruction}, $item{attrs}, $item{body});
-	1 }
+	{ $return = [ $item{instruction}, $item{attrs}, $item{body} ]; 1 }
 		| text
 		| <error>
 
@@ -118,20 +120,23 @@ unreserved	: /[^'"\\{}]/
 # !root (path = "substring-after($path, '/')")
 
 exclam_double	: value(?) params(?) attrs ";"
-	{ $return = ::format_apply($item{value}, $item{params}, $item{attrs}); 1 }
+	{ $return = [
+		"X:apply-templates", "select", $item{value}, $item{attrs},
+		$item{params}
+	]; 1 }
 
-exclam_xpath	: xpath(s?) "}"
-xpath		: /[^}'"]+/
-		| /"[^"]*"/
-		| /'[^']*'/
-
-exclam_name	: params
+exclam_xpath	: xpath "}"
+	{ $return = [
+		"X:value-of", "select", $item{xpath}, []
+	]; 1 }
+xpath		: /("[^"]*"|'[^']*'|[^}'"])*/ms
 
 # instruction attributes
 # name="value"
 
 attrs		: attr(s?)
 attr		: name "=" value
+	{ $return = $item{name} . "=" . $item{value}; }
 name		: /[a-z0-9_:-]+/i
 value		: /"[^"]*"/
 
@@ -141,8 +146,21 @@ value		: /"[^"]*"/
 params		: "(" param(s /,/) ")" 
 	{ $return = $item[2]; 1 }
 param		: name "=" value
+	{ $return = [
+		"X:with-param",
+		"select", $item{value},
+		"name", $item{name},
+		[]
+	]; 1 }
 		| name "=" <commit> "{" item(s) "}"
+	{ $return = [
+		"X:with-param", "name", $item{name}, [],
+		$item{item}
+	]; 1 }
 		| name
+	{ $return = [
+		"X:with-param", "name", $item{name}, []
+	]; 1 }
 
 # instruction body
 # ";" for empty body, "{ ... }" otherwise
@@ -150,80 +168,138 @@ param		: name "=" value
 body		: ";"
 	{ $return = ""; }
 		| "{" <commit> item(s?) "}"
-	{ $return = join("\n", @{$item[3]}); 1 }
+	{ $return = $item[3]; 1 }
 
 # special handling of some instructions
 # X:if attribute is test=
 
-xif		: value(?) attrs body "else" <commit> body
-		| value(?) attrs body
+xif		: value body "else" <commit> body
+	{ $return = [
+		"X:choose", [], [
+			[ "X:when", "test", $item[1], [], $item[2] ],
+			[ "X:otherwise", [], $item[5] ]
+		]
+	]; 1 }
+		| value attrs body
+	{ $return = [
+		"X:if", "test", $item[1], $item{attrs}, $item{body},
+	]; 1 }
+		| attrs body
+	{ $return = [
+		"X:if", $item{attrs}, $item{body},
+	]; 1 }
 		| <error>
 
 # X:template name(params) = "match" {
 # X:template name( bar="init", baz={markup} ) = "match" mode="some" {
 
-xtemplate	: name(?) params(?) ( "=" value )(?)
-		  attrs body
+xtemplate	: name(?) params(?) ( "=" value )(?) attrs body
+	{ $return = [
+		"X:template", "name", $item[1][0], "match", $item[3][0],
+		$item{attrs},
+		[ ($item{params} ? @{$item{params}} : ()), @{$item{body}} ]
+	]; 1 }
 
 # X:var LINK = "/article/@link";
 # X:var year = { ... }
 # semicolon is optional
 
-xvariable	: name "=" value(?) attrs body
-		| name "=" value(?)
+xvariable	: name "=" value attrs body
+	{ $return = [
+		"X:variable",
+		"select", $item{value},
+		"name", $item{name},
+		$item{attrs}, $item{body}
+	]; 1 }
+		| name "=" attrs body
+	{ $return = [
+		"X:variable",
+		"name", $item{name},
+		$item{attrs}, $item{body}
+	]; 1 }
+		| name "=" value
+	{ $return = [
+		"X:variable",
+		"select", $item{value},
+		"name", $item{name},
+		[]
+	]; 1 }
+		| name "=" 
+	{ $return = [
+		"X:variable",
+		"name", $item{name},
+		[]
+	]; 1 }
 		| <error>
 
 # X:param XML = "'../xml'";
 # X:param YEAR;
 
-xparam		: name ("=" value)(?) attrs body
+xparam		: name "=" value attrs body
+	{ $return = [
+		"X:param",
+		"select", $item{value},
+		"name", $item{name},
+		$item{attrs}, $item{body}
+	]; 1 }
+		| name attrs body
+	{ $return = [
+		"X:param", "name", $item{name},
+		$item{attrs}, $item{body}
+	]; 1 }
 
 # X:for-each "section[@id and @name]" { ... }
 # X:for-each "link", X:sort "@id" {
 
 xforeach	: value attrs body
-	{ $return = ::format_instruction_value(
-		"X:for-each", "select", $item{value}, $item{attrs}, $item{body});
-	1 }
+	{ $return = [
+		"X:for-each", "select", $item{value}, $item{attrs}, $item{body}
+	]; 1 }
 		| value attrs "," "X:sort" <commit> value attrs body
+	{ $return = [
+		"X:for-each", "select", $item[1], $item[2], [
+			[ "X:sort", "select", $item[6], $item[7] ],
+			@{$item{body}}
+		]
+	]; 1 }
 
 # X:sort select
 # X:sort "@id"
 
 xsort		: value attrs body
-	{ $return = ::format_instruction_value(
-		"X:sort", "select", $item{value}, $item{attrs}, $item{body});
-	1 }
+	{ $return = [
+		"X:sort", "select", $item{value}, $item{attrs}, $item{body}
+	]; 1 }
 
 # X:when "position() = 1" { ... }
 
 xwhen		: value attrs body
-	{ $return = ::format_instruction_value(
-		"X:when", "test", $item{value}, $item{attrs}, $item{body});
-	1 }
+	{ $return = [
+		"X:when", "test", $item{value}, $item{attrs}, $item{body}
+	]; 1 }
 
 # X:attribute "href" { ... }
 
 xattribute	: value attrs body
-	{ $return = ::format_instruction_value(
-		"X:attribute", "name", $item{value}, $item{attrs}, $item{body});
-	1 }
+	{ $return = [
+		"X:attribute", "name", $item{value}, $item{attrs}, $item{body}
+	]; 1 }
 
 # X:output
 # semicolon is optional
 
 xoutput		: attrs body(?)
-	{ $return = ::format_instruction(
-		"X:output", $item{attrs}, $item{body});
-	1 }
+	{ $return = [
+		"X:output", undef, undef, $item{attrs}, $item{body}
+	]; 1 }
 
 # "X:copy-of"
 # semicolon is optional
 
 xcopyof		: value attrs body(?)
-	{ $return = ::format_instruction_value(
-		"X:copy-of", "select", $item{value}, $item{attrs}, $item{body});
-	1 }
+	{ $return = [
+		"X:copy-of", "select", $item{value}, $item{attrs}, $item{body}
+	]; 1 }
 
 # eof
 
@@ -233,70 +309,84 @@ EOF
 
 ###############################################################################
 
-# helper formatting functions, used by grammar
+sub format_tree {
+	my ($tree, $indent) = @_;
+	my $s = '';
 
-sub format_instruction {
-	my ($instruction, $attrs, $body) = @_;
-	my $s = "<";
+	$indent ||= 0;
+	my $space = "   " x $indent;
 
-	$instruction =~ s/^X:/xsl:/;
+	foreach my $el (@{$tree}) {
+		if (!defined $el) {
+			$s .= $space . "(undef)" . "\n";
+			next;
+		}
 
-	$s .= join(" ", $instruction, @{$attrs});
+		if (not ref($el) && defined $el) {
+			$s .= $space . $el . "\n";
+			next;
+		}
 
-	if ($body) {
-		$s .= ">\n" . $body . "\n</" . $instruction . ">\n";
-	} else {
-		$s .= "/>\n";
+		die if ref($el) ne 'ARRAY';
+
+		my $tag = $el->[0];
+
+		if ($tag eq 'tag') {
+			my (undef, $name, $attrs, $body) = @{$el};
+
+			$s .= $space . "<" . join(" ", $name, @{$attrs});
+			if ($body) {
+				$s .= ">\n";
+				$s .= format_tree($body, $indent + 1);
+				$s .= $space . "</$name>\n";
+			} else {
+				$s .= "/>\n";
+			}
+
+			next;
+		}
+
+		if ($tag =~ m/^X:(.*)/) {
+			my $name = "xsl:" . $1;
+			my (undef, @a) = @{$el};
+			my @attrs;
+
+			while (@a) {
+				last if ref($a[0]) eq 'ARRAY';
+				my $name = shift @a;
+				my $value = shift @a;
+				next unless defined $value;
+				$value = '"' . $value . '"'
+					unless $value =~ /^"/;
+				push @attrs, "$name=$value";
+			}
+
+			if ($name eq "xsl:stylesheet") {
+				$s .= '<?xml version="1.0" encoding="utf-8"?>' . "\n";
+				push @attrs, 'xmlns:xsl="http://www.w3.org/1999/XSL/Transform"';
+				push @attrs, 'version="1.0"';
+			}
+
+			my ($attrs, $body) = @a;
+			$attrs = [ @{$attrs}, @attrs ];
+
+			$s .= $space . "<" . join(" ", $name, @{$attrs});
+			
+			if ($body) {
+				$s .= ">\n";
+				$s .= format_tree($body, $indent + 1);
+				$s .= $space . "</$name>\n";
+			} else {
+				$s .= "/>\n\n";
+			}
+
+			next;
+		}
+
+		$s .= format_tree($el, $indent + 1);
 	}
 
 	return $s;
-}
-
-sub format_instruction_value {
-	my ($instruction, $name, $value, $attrs, $body) = @_;
-	my $s = "<";
-
-	if ($value) {
-		push(@{$attrs}, "$name=$value");
-	}
-
-	return format_instruction($instruction, $attrs, $body);
-}
-
-sub format_tag {
-	my ($tag, $attrs, $body) = @_;
-	my $s = "\n<";
-
-	$s .= join(" ", $tag, @{$attrs});
-
-	$body = join("\n", @{$body});
-
-	if ($body) {
-		$s .= ">" . $body . "\n</" . $tag . ">\n";
-	} else {
-		$s .= "/>\n";
-	}
-
-	return $s;
-}
-
-sub format_apply {
-	my ($select, $params, $attrs) = @_;
-	my $s = "\n<";
-	my $tag = "xsl:apply-templates";
-
-	if ($select) {
-		unshift "select=$select", @{$attrs};
-	}
-
-	$s .= join(" ", $tag, @{$attrs});
-
-	if ($params) {
-		$params = join("\n", @{$params});
-		$s .= ">\n" . $params . "\n</" . $tag . ">\n";
-	} else {
-		$s .= "/>\n";
-	}
 }
 
 ###############################################################################
@@ -317,5 +407,6 @@ my $tree = $parser->startrule($lines)
 #print Dumper($tree);
 #print join("\n", @{$tree});
 
-###############################################################################
+print format_tree($tree);
+
 ###############################################################################
