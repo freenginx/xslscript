@@ -23,9 +23,12 @@ use Data::Dumper qw/Dumper/;
 
 ###############################################################################
 
+my $dump = 0;
+
 GetOptions(
 	"trace!" => \$::RD_TRACE,
 	"hint!" => \$::RD_HINT,
+	"dump!" => \$dump,
 )
 	or die "oops\n";
 
@@ -417,7 +420,11 @@ my $lines;
 my $tree = $parser->startrule($lines)
 	or die "Failed to parse $ARGV.\n";
 
-#print Dumper($tree);
+if ($dump) {
+	print Dumper($tree);
+	exit(0);
+}
+
 print format_tree($tree);
 
 ###############################################################################
