@@ -38,8 +38,8 @@ my $grammar = <<'EOF';
 
 # XSLTScript grammar, reconstructed
 
-startrule	: item(s) eofile
-	{ $return = $item[1]; 1 }
+startrule	: <skip:""> item(s) eofile
+	{ $return = $item{'item(s)'}; 1 }
 
 item		: "<!--" <commit> comment
 		| "!!" <commit> exclam_double
@@ -49,25 +49,26 @@ item		: "<!--" <commit> comment
 		"X:call-template", "name", $item{name}, [],
 		$item{params}
 	]; 1 }
-		| "<%" <commit> instruction "%>"
+		| "<%" <commit> space instruction space "%>"
 	{ $return = $item{instruction}; 1 }
-		| "<" name attrs ">" <commit> item(s?) "</" name ">"
-	{ $return = [ "tag", $item{name}, $item{attrs}, $item[6] ]; 1 }
-		| "<" <commit> name attrs "/" ">"
+		| "<" name attrs space ">" <commit> item(s?) "</" name ">"
+	{ $return = [ "tag", $item{name}, $item{attrs}, $item{'item(s?)'} ]; 1 }
+		| "<" <commit> name attrs space "/>"
 	{ $return = [ "tag", $item{name}, $item{attrs} ]; 1 }
-		| "X:variable" <commit> xvariable
-		| "X:var" <commit> xvariable
-		| "X:template" <commit> xtemplate
-		| "X:if" <commit> xif
-		| "X:param" <commit> xparam
-		| "X:for-each" <commit> xforeach
-		| "X:sort" <commit> xsort
-		| "X:when" <commit> xwhen
-		| "X:attribute" <commit> xattribute
-		| "X:output" <commit> xoutput
-		| "X:copy-of" <commit> xcopyof
-		| instruction <commit> attrs body
+		| "X:variable" space <commit> xvariable
+		| "X:var" space <commit> xvariable
+		| "X:template" space <commit> xtemplate
+		| "X:if" space <commit> xif
+		| "X:param" space <commit> xparam
+		| "X:for-each" space <commit> xforeach
+		| "X:sort" space <commit> xsort
+		| "X:when" space <commit> xwhen
+		| "X:attribute" space <commit> xattribute
+		| "X:output" space <commit> xoutput
+		| "X:copy-of" space <commit> xcopyof
+		| instruction space <commit> attrs body
 	{ $return = [ $item{instruction}, $item{attrs}, $item{body} ]; 1 }
+		| space_notempty
 		| text
 		| <error>
 
@@ -102,7 +103,7 @@ instruction	: "X:stylesheet"
 # likely an artifact of our dump process
 
 comment		: /((?!-->).)*/ms "-->"
-	{ $return = ""; 1 }
+	{ $return = "<!--" . $item[1] . "-->"; 1 }
 
 # special chars: ', ", {, }, \
 # if used in text, they needs to be escaped with backslash
@@ -111,7 +112,12 @@ text		: quoted | unreserved | "'" | "\"" | "{"
 quoted		: "\\" special
 	{ $return = $item{special}; 1; }
 special		: "'" | "\"" | "\\" | "{" | "}"
-unreserved	: /[^'"\\{}<\s]+\s*/
+unreserved	: /[^'"\\{}<\s]+\s*/ms
+
+# whitespace
+
+space		: /\s*/ms
+space_notempty	: /\s+/ms
 
 # shortcuts:
 #
@@ -122,10 +128,10 @@ unreserved	: /[^'"\\{}<\s]+\s*/
 # !root (path = { !{ substring($DIRNAME, 2) } })
 # !root (path = "substring-after($path, '/')")
 
-exclam_double	: value(?) params(?) attrs ";"
+exclam_double	: space value(?) params(?) attrs space ";"
 	{ $return = [
-		"X:apply-templates", "select", $item[1][0], $item{attrs},
-		$item[2][0]
+		"X:apply-templates", "select", $item{'value(?)'}[0],
+		$item{attrs}, $item{'params(?)'}[0]
 	]; 1 }
 
 exclam_xpath	: xpath "}"
@@ -138,7 +144,7 @@ xpath		: /("[^"]*"|'[^']*'|[^}'"])*/ms
 # name="value"
 
 attrs		: attr(s?)
-attr		: name "=" value
+attr		: space name space "=" space value
 	{ $return = $item{name} . "=" . $item{value}; }
 name		: /[a-z0-9_:-]+/i
 value		: /"[^"]*"/
@@ -146,21 +152,21 @@ value		: /"[^"]*"/
 # template parameters
 # ( bar="init", baz={markup} )
 
-params		: "(" param(s? /,/) ")" 
-	{ $return = $item[2]; 1 }
-param		: name "=" value
+params		: space "(" param(s? /\s*,\s*/) ")" space
+	{ $return = $item[3]; 1 }
+param		: space name space "=" space value space
 	{ $return = [
 		"X:with-param",
 		"select", $item{value},
 		"name", $item{name},
 		[]
 	]; 1 }
-		| name "=" <commit> "{" item(s) "}"
+		| space name space "=" <commit> space "{" item(s) "}"
 	{ $return = [
 		"X:with-param", "name", $item{name}, [],
-		$item[5]
+		$item{'item(s)'}
 	]; 1 }
-		| name
+		| space name
 	{ $return = [
 		"X:param", "name", $item{name}, []
 	]; 1 }
@@ -168,19 +174,19 @@ param		: name "=" value
 # instruction body
 # ";" for empty body, "{ ... }" otherwise
 
-body		: ";"
+body		: space ";"
 	{ $return = ""; }
-		| "{" <commit> item(s?) "}"
-	{ $return = $item[3]; 1 }
+		| space "{" <commit> item(s?) "}" (space ";")(?)
+	{ $return = $item{'item(s?)'}; 1 }
 
 # special handling of some instructions
 # X:if attribute is test=
 
-xif		: value body "else" <commit> body
+xif		: value body space "else" <commit> body
 	{ $return = [
 		"X:choose", [], [
 			[ "X:when", "test", $item[1], [], $item[2] ],
-			[ "X:otherwise", [], $item[5] ]
+			[ "X:otherwise", [], $item[6] ]
 		]
 	]; 1 }
 		| value attrs body
@@ -196,9 +202,12 @@ xif		: value body "else" <commit> body
 # X:template name(params) = "match" {
 # X:template name( bar="init", baz={markup} ) = "match" mode="some" {
 
-xtemplate	: name(?) params(?) ( "=" value )(?) attrs body
+xtemplate	: name(?) params(?) space
+                  (space "=" space value)(?) attrs body
 	{ $return = [
-		"X:template", "name", $item[1][0], "match", $item[3][0],
+		"X:template",
+		"name", $item{'name(?)'}[0],
+		"match", $item[4][0],
 		$item{attrs},
 		[ ($item[2][0] ? @{$item[2][0]} : ()), @{$item{body}} ]
 	]; 1 }
@@ -207,27 +216,27 @@ xtemplate	: name(?) params(?) ( "=" value )(?) attrs body
 # X:var year = { ... }
 # semicolon is optional
 
-xvariable	: name "=" value attrs body
+xvariable	: name space "=" space value attrs body
 	{ $return = [
 		"X:variable",
 		"select", $item{value},
 		"name", $item{name},
 		$item{attrs}, $item{body}
 	]; 1 }
-		| name "=" attrs body
+		| name space "=" space attrs body
 	{ $return = [
 		"X:variable",
 		"name", $item{name},
 		$item{attrs}, $item{body}
 	]; 1 }
-		| name "=" value
+		| name space "=" space value
 	{ $return = [
 		"X:variable",
 		"select", $item{value},
 		"name", $item{name},
 		[]
 	]; 1 }
-		| name "=" 
+		| name space "=" 
 	{ $return = [
 		"X:variable",
 		"name", $item{name},
@@ -238,7 +247,7 @@ xvariable	: name "=" value attrs body
 # X:param XML = "'../xml'";
 # X:param YEAR;
 
-xparam		: name "=" value attrs body
+xparam		: name space "=" space value attrs body
 	{ $return = [
 		"X:param",
 		"select", $item{value},
@@ -258,10 +267,11 @@ xforeach	: value attrs body
 	{ $return = [
 		"X:for-each", "select", $item{value}, $item{attrs}, $item{body}
 	]; 1 }
-		| value attrs "," "X:sort" <commit> value attrs body
+		| value attrs space
+		  "," space "X:sort" <commit> space value attrs body
 	{ $return = [
 		"X:for-each", "select", $item[1], $item[2], [
-			[ "X:sort", "select", $item[6], $item[7] ],
+			[ "X:sort", "select", $item[9], $item[10] ],
 			@{$item{body}}
 		]
 	]; 1 }
@@ -331,7 +341,12 @@ sub format_tree {
 		}
 
 		if (not ref($el) && defined $el) {
-			#$s .= $space . $el . "\n";
+			if ($el =~ /^<!--(.*)-->$/s) {
+				my $comment = $1;
+				$comment =~ s/--/../sg;
+				$el = "<!--" . $comment . "-->";
+			}
+
 			$s .= $el;
 			next;
 		}
@@ -343,17 +358,12 @@ sub format_tree {
 		if ($tag eq 'tag') {
 			my (undef, $name, $attrs, $body) = @{$el};
 
-			$s .= $space . "<" . join(" ", $name, @{$attrs});
+			$s .= "<" . join(" ", $name, @{$attrs});
 			if ($body) {
-				my $t = format_tree($body, $indent + 1);
-				if ($t =~ /\n/) {
-					$s .= ">\n" . $t
-						. $space . "</$name>\n";
-				} else {
-					$s .= ">$t</$name>\n";
-				}
+				$s .= ">" . format_tree($body, $indent + 1)
+					. "</$name>";
 			} else {
-				$s .= "/>\n";
+				$s .= "/>";
 			}
 
 			next;
@@ -382,18 +392,13 @@ sub format_tree {
 			my ($attrs, $body) = @a;
 			$attrs = [ @{$attrs}, @attrs ];
 
-			$s .= $space . "<" . join(" ", $name, @{$attrs});
+			$s .= "<" . join(" ", $name, @{$attrs});
 			
 			if ($body && scalar @{$body} > 0) {
-				my $t = format_tree($body, $indent + 1);
-				if ($t =~ /\n/) {
-					$s .= ">\n" . $t
-						. $space . "</$name>\n";
-				} else {
-					$s .= ">$t</$name>\n";
-				}
+				$s .= ">" . format_tree($body, $indent + 1)
+					. "</$name>";
 			} else {
-				$s .= "/>\n";
+				$s .= "/>";
 			}
 
 			next;
