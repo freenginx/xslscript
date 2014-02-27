@@ -1,6 +1,7 @@
 #!/usr/bin/perl
 
 # (C) Maxim Dounin
+# (C) Nginx, Inc.
 
 # Convert from XSLScript to XSLT.
 # 
