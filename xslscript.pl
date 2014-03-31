@@ -39,7 +39,7 @@ GetOptions(
 
 my $grammar = <<'EOF';
 
-# XSLTScript grammar, reconstructed
+# XSLScript grammar, reconstructed
 
 startrule	: <skip:""> item(s) eofile
 	{ $return = $item{'item(s)'}; 1 }
