@@ -45,6 +45,7 @@ startrule	: <skip:""> item(s) eofile
 	{ $return = $item{'item(s)'}; 1 }
 
 item		: "<!--" <commit> comment
+		| "<![CDATA[" <commit> cdata
 		| "!!" <commit> exclam_double
 		| "!{" <commit> exclam_xpath
 		| "!" name <commit> params
@@ -107,6 +108,11 @@ instruction	: "X:stylesheet"
 
 comment		: /((?!-->).)*/ms "-->"
 	{ $return = "<!--" . $item[1] . "-->"; 1 }
+
+# cdata, <![CDATA[ ... ]]>
+
+cdata		: /((?!]]>).)*/ms "]]>"
+	{ $return = "<![CDATA[" . $item[1] . "]]>"; 1 }
 
 # special chars: ', ", {, }, \
 # if used in text, they needs to be escaped with backslash
